@@ -1,8 +1,18 @@
-from ok import BaseTask
+from src.tasks.guide_nav import GuideNavTask
 import re
+
+# 进入方式：走「指南」列表（原来是在主页面找 main_pointrace，
+# 每个玩家主页背景不同，经常匹配不到）
+GUIDE_ITEM = 'guide_pointrace'
+GUIDE_TEXT = '积分赛'   # 指南列表里条目的文字（OCR 识别）
+GUIDE_GO = 'guide_pointracego'
 
 # 挑战没成功时额外重试的次数（1 表示最多打两次）
 CHALLENGE_RETRY = 1
+
+# 「进入积分赛并展开对手列表」失败（没检测到并点到 pointrace_challenge）时，
+# 回主页面重新进入的额外重试次数。用户要求只重试一次。
+ENTRY_RETRY = 1
 
 # 本队战力：先在画面里找 pointrace_personalpower 图标，再 OCR 它右侧的数字。
 # 原来靠全屏 OCR 找「本队战力」这几个字，那个词受字体和背景影响、识别不稳；
@@ -15,7 +25,7 @@ POWER_REGION_WIDTH_RATIO = 2.5   # 向右扫的宽度 = 图标宽 × 这个倍�
 POWER_REGION_PAD_RATIO = 0.3
 
 
-class PointRaceTask(BaseTask):
+class PointRaceTask(GuideNavTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.name = "积分赛"
@@ -24,23 +34,47 @@ class PointRaceTask(BaseTask):
     def run(self):
         self.log_info("开始积分赛...")
 
-        # ========== 1. 进入积分赛 ==========
-        box = self.swipe_find('main_pointrace', max_swipes=4, click=True)
-        if not box:
-            self.log_error("未找到积分赛入口，任务终止")
-            return
-        self.sleep(1.2)
+        # ========== 1. 进入积分赛并展开对手列表（失败重试一次）==========
+        # 用户要求：如果没检测到并点到「挑战」(pointrace_challenge)，
+        # 就回主页面重新进来再试，只重试一次。
+        entered = False
+        for attempt in range(ENTRY_RETRY + 1):
+            if attempt:
+                self.log_warning(f"===== 重新进入积分赛（第 {attempt} 次重试）=====")
 
-        # 点击屏幕中央五次
-        for i in range(5):
-            self.click_relative(0.5, 0.5)
-            self.sleep(0.8)
+            if not self.enter_guide(GUIDE_TEXT, GUIDE_GO, item_feature=GUIDE_ITEM):
+                self.log_warning("没能通过指南进入积分赛")
+            else:
+                self.sleep(1.2)
+                # 点击屏幕中央五次，点掉进入后可能出现的提示
+                for i in range(5):
+                    self.click_relative(0.5, 0.5)
+                    self.sleep(0.8)
+
+                # 这一步内部会检测并点击 pointrace_challenge
+                if self.ensure_opponent_screen():
+                    entered = True
+                    break
+                self.log_warning("没有检测到并点到「挑战」，准备重试")
+
+            if attempt < ENTRY_RETRY:
+                self.log_warning(f"回主页面重新进入积分赛（{attempt + 1}/{ENTRY_RETRY}）")
+                self.back_to_main(max_rounds=12, interval=0.8, log=False)
+                self.sleep(1.0)
+
+        if not entered:
+            self.log_error(f"重试 {ENTRY_RETRY} 次仍没能进入积分赛挑战界面，任务终止")
+            self.back_to_main(max_rounds=12, interval=0.8, log=False)
+            return
 
         # ========== 2. 循环挑战 ==========
         max_loops = 20
         exit_reason = "正常结束"
 
         for loop in range(max_loops):
+            if self.should_stop('积分赛挑战'):
+                exit_reason = "已被停止"
+                break
             self.log_info(f"--- 第 {loop + 1} 轮 ---")
 
             # 2.1 检查挑战次数（在中间页面检测）
