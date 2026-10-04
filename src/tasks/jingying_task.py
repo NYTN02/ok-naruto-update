@@ -1,9 +1,10 @@
 from ok import BaseTask
+from src.tasks.page_nav import MAIN_PAGE_FEATURE, PageNavTask
 import re
 import time
 
 
-class JingYingTask(BaseTask):
+class JingYingTask(PageNavTask):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.name = "精英副本"
@@ -13,11 +14,10 @@ class JingYingTask(BaseTask):
         self.log_info("开始精英副本...")
 
         try:
-            # 1. 点击主界面冒险入口
-            box = self.swipe_find('main_adventure', max_swipes=4, click=True)
-            if not box:
-                self.log_error("未找到冒险入口，任务终止")
-                return
+            # 1. 进「冒险」：检测主页面标志(main_guide) -> 点冒险入口 rel(0.909, 0.869)
+            #    原来是 swipe_find('main_adventure', click=True) 一个模板干两件事：
+            #    检测不稳（主页背景各不相同）、滑动查找对固定位置的按钮也没必要。
+            self.click_adventure_entry()
             self.sleep(1.5)
 
             # 2. 点击精英副本
@@ -72,14 +72,14 @@ class JingYingTask(BaseTask):
         """
         反复尝试退出到主页面。
         退出成功标志：
-          1. 出现 main_adventure
+          1. 回到主页面（见到 MAIN_PAGE_FEATURE）
           2. 找不到 popu_cancel
         """
         self.log_info("[退出] 开始尝试退出到主页面")
         for i in range(max_rounds):
             # 检查是否已回到主页面
-            if self.find_one('main_adventure', threshold=0.8):
-                self.log_info(f"[退出] 第 {i+1} 轮：检测到 main_adventure，已回到主页面")
+            if self.find_one(MAIN_PAGE_FEATURE, threshold=0.8):
+                self.log_info(f"[退出] 第 {i+1} 轮：检测到主页面标志，已回到主页面")
                 return True
 
             # 尝试点 popu_cancel
@@ -88,10 +88,10 @@ class JingYingTask(BaseTask):
                 self.sleep(1.0)
                 continue
 
-            # 没有 popu_cancel 也没有 main_adventure，再等一次确认
+            # 没有 popu_cancel 也没有主页面标志，再等一次确认
             self.sleep(1.0)
-            if self.find_one('main_adventure', threshold=0.8):
-                self.log_info(f"[退出] 第 {i+1} 轮：检测到 main_adventure，已回到主页面")
+            if self.find_one(MAIN_PAGE_FEATURE, threshold=0.8):
+                self.log_info(f"[退出] 第 {i+1} 轮：检测到主页面标志，已回到主页面")
                 return True
             if not self.find_one('popu_cancel', threshold=0.8):
                 self.log_info(f"[退出] 第 {i+1} 轮：没有 popu_cancel，退出结束")
