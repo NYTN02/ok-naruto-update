@@ -233,6 +233,18 @@
             "file_name": "images/1.png",
             "width": 1600,
             "height": 900
+        },
+        {
+            "id": 44,
+            "file_name": "images/1.png",
+            "width": 1600,
+            "height": 900
+        },
+        {
+            "id": 45,
+            "file_name": "images/5.png",
+            "width": 1600,
+            "height": 900
         }
     ],
     "annotations": [
@@ -1418,6 +1430,32 @@
             ],
             "area": 67660,
             "iscrowd": 0
+        },
+        {
+            "id": 92,
+            "image_id": 44,
+            "category_id": 92,
+            "bbox": [
+                473,
+                805,
+                121,
+                63
+            ],
+            "area": 7623,
+            "iscrowd": 0
+        },
+        {
+            "id": 93,
+            "image_id": 45,
+            "category_id": 93,
+            "bbox": [
+                1477,
+                791,
+                62,
+                54
+            ],
+            "area": 3348,
+            "iscrowd": 0
         }
     ],
     "categories": [
@@ -1874,6 +1912,16 @@
         {
             "id": 91,
             "name": "teamfight_win",
+            "supercategory": ""
+        },
+        {
+            "id": 92,
+            "name": "weeklyrendao_yes",
+            "supercategory": ""
+        },
+        {
+            "id": 93,
+            "name": "share_wechat",
             "supercategory": ""
         }
     ]
