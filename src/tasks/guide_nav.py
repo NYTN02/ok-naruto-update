@@ -87,6 +87,59 @@ GUIDE_SCROLL_DOWN_TO_Y = 0.325      # 往下找：终点（拖到这里再松手
 GUIDE_SCROLL_UP_FROM_Y = 0.325      # 往上找：起点
 GUIDE_SCROLL_UP_TO_Y = 0.777        # 往上找：终点
 
+# ---------------------------------------------------------------------------
+# 内缩的备用起止线（滑不动时的第二级补救）
+#
+# 为什么需要：**终点落在哪不重要，但起点必须落在列表的可触摸区域里**，
+# 否则这一次拖动根本不会生效。而上面那两条线是两个方向的**起点**分别在
+# 0.777 和 0.325 —— 起点位置本来就是不对称的：
+#
+#   往下找 起点 0.777（列表靠下）  ← 如果列表的可触摸区没到这么低，就整条失效
+#   往上找 起点 0.325（列表靠上）  ← 通常落在列表里，所以"看起来正常"
+#
+# 这正好解释"只有一个方向滑不动"。所以滑不动时，再用一对**内缩**的线补救一次 ——
+# 内缩后两个方向的起点都稳稳在列表内部，不会再踩这个坑。
+# 注意"内缩"是**往列表中间收**：0.777/0.325 这对线收紧成 0.700/0.400，
+# 两端都离列表边缘更远（一开始把 TO 写成 0.300 是往外扩了，方向搞反，被用例拦住）。
+# 用户给定的那两条线仍是首选，不会被替换掉。
+GUIDE_SCROLL_INNER_FROM_Y = 0.700
+GUIDE_SCROLL_INNER_TO_Y = 0.400
+
+# ---------------------------------------------------------------------------
+# 条目只可能出现在左侧列表这一列里。
+#
+# ⚠️ 为什么必须限定区域：``self.ocr()`` 是**全屏**识别的，
+#    而「指南」界面右侧有详情/预览面板，里面也会出现条目名称。
+#    用户日志实证（2026-10-13）：
+#        23:40:18 [指南] OCR 认到「积分赛」  (245, 508)    x=0.096  左侧 ✓
+#        23:49:54 [指南] OCR 认到「丰饶之间」(1805, 744)   x=0.705  右侧 ✗
+#        23:50:33 ERROR 没能通过指南进入丰饶之间，任务终止
+#    也就是它把右侧面板里的同名文字当成了列表条目，点过去当然没反应。
+#
+#    右侧显示什么内容不由我们控制（跟游戏活动 / 玩家进度有关），
+#    所以会出现"第一天能用、后来突然不行"—— 不是程序变了，是界面内容变了。
+# ---------------------------------------------------------------------------
+# OCR 容错：条目名的**前 N 个字**相同就认。
+#
+# ⚠️ 为什么需要：OCR 会把形近字认错、也会把长名字截断。实测出现过
+#      「小队突袭」-> 「小队突装」(袭/装 形近, 置信度 0.85)
+#      「任务集会所」-> 「任务集」  (被截断)
+#   这时精确匹配的正则会判"没找到"，然后一路滑到底、白白浪费十几秒，
+#   日志里却只写"滑遍都没找到"，极难定位。
+#
+# 2 个字（用户指定）。注意：前缀越短越容易匹配到别的文字 —— 比如「任务集会所」
+# 取「任务」，而指南界面上本来就有一处独立显示「任务」的标签。所以：
+#   * 只在**精确匹配失败后**才用前缀（前缀只是兜底，不是首选）
+#   * 仍然限定在左侧列表区域内（GUIDE_LIST_HIT_*）
+#   * 用前缀匹配到时会记 warning，日志里能看到
+#   * 拿到框之后还要点它下方的「前往」才算成功，取错条目那一步也会失败
+GUIDE_ENTRY_PREFIX_LEN_SAMPLE = '小队突袭 / 任务集会所 / 丰饶之间 / 积分赛 …'
+GUIDE_ENTRY_PREFIX_LEN = 2
+
+GUIDE_LIST_HIT_X_MAX = 0.35          # 条目中心 x 超过这个值就认为不是列表条目
+GUIDE_LIST_HIT_Y_MIN = 0.10
+GUIDE_LIST_HIT_Y_MAX = 0.92
+
 GUIDE_SCROLL_SETTLE = 0.35      # 拖到终点后再按住多久才松开
 
 # ---------------------------------------------------------------------------
@@ -131,11 +184,18 @@ GUIDE_SCROLL_MAX = 20
 # ---------------------------------------------------------------------------
 GUIDE_LIST_SIG_X1, GUIDE_LIST_SIG_X2 = 0.05, 0.30   # 列表区域（相对坐标）
 GUIDE_LIST_SIG_Y1, GUIDE_LIST_SIG_Y2 = 0.18, 0.80
-GUIDE_LIST_MOVE_THRESHOLD = 2.0   # 平均灰度差小于这个值就认为"没动"
+GUIDE_LIST_MOVE_THRESHOLD = 2.0
+# 判断画面有没有变化用的阈值（整屏缩略图的平均灰度差）。
+# 用在领奖流程里：点「可领取」之后要确认画面确实变了，否则不能盲点下一步。
+SCREEN_CHANGE_THRESHOLD = 2.0   # 平均灰度差小于这个值就认为"没动"
 GUIDE_STUCK_TOLERANCE = 2         # 连续几次滑不动就放弃这个方向
 
 # 各等待时长（秒）
 GUIDE_ENTRY_TIMEOUT = 5.0       # 等 main_guide 出现
+# 点完 main_guide 之后等多久，再确认"是不是真的进指南了"
+GUIDE_ENTRY_VERIFY_WAIT = 1.0
+# 点不开就重试几次（见 open_guide 的说明）
+GUIDE_ENTRY_ATTEMPTS = 3
 GUIDE_OPEN_WAIT = 1.8           # 点开指南后等列表加载
 GUIDE_ITEM_TIMEOUT = 3.0        # 等条目/前往按钮出现
 GUIDE_ITEM_WAIT = 1.5           # 点条目后等界面切换
@@ -145,8 +205,46 @@ GUIDE_GO_WAIT = 1.8
 # 「立刻前往」这类入口文字的匹配（用正则做包含匹配，避免 OCR 多字少字就失配）
 DAILY_TASK_PATTERN = re.compile(r'每日任务')
 
-# 指南条目点开后的「前往」按钮文字。模板认不到时用它兜底。
+# 「前往」按钮文字。模板认不到时用它兜底。
 GO_TEXT_PATTERN = re.compile(r'前往')
+
+# ---------------------------------------------------------------------------
+# 进入方式：「忍界指引」（走指南列表）还是「奖励」（走每日任务）
+#
+# 两条路各有适用场景：指南列表条目标注稳定但有 20+ 项、要上下滑动找；
+# 每日任务是横向的少数几张卡，找起来快，而且每张卡自带「立刻前往」。
+# 所以做成任务级选项，一键日常也可以统一指定。
+#
+# 注意：**不是每个任务都在每日任务里**（排行榜就没有），
+# 所以只有确实存在的任务才把「奖励」加进选项中。
+# ---------------------------------------------------------------------------
+ENTRY_MODE_KEY = '进入方式'
+ENTRY_MODE_GUIDE = '忍界指引'
+ENTRY_MODE_REWARD = '奖励'
+# 「奖励」进入方式已停用（实测有问题：左右滑不动、条目定位不稳）。
+# 保留常量与 enter_reward 的实现，以后要恢复只需把选项加回来 + 这里改 True。
+REWARD_MODE_ENABLED = False
+
+# 走「奖励」（每日任务）时需要的东西
+REWARD_ENTRY = 'main_reward'          # 主页面上的每日任务/奖励入口
+GO_TEXT = '立刻前往'                   # 条目正下方的按钮文字
+# 左右滑动用**固定的两条线**（用户实测指定），不再用"屏幕中央 + 距离"算：
+#     往左找（想看列表更左边的内容）：按住 (0.355, 0.378) 滑到 (0.808, 0.368)
+#     往右找（想看列表更右边的内容）：按住 (0.808, 0.368) 滑到 (0.355, 0.378)
+# 手指方向和内容方向是反的：往左找时手指往**右**拖。
+REWARD_SCROLL_LEFT_FROM = (0.355, 0.378)
+REWARD_SCROLL_LEFT_TO = (0.808, 0.368)
+REWARD_SCROLL_RIGHT_FROM = (0.808, 0.368)
+REWARD_SCROLL_RIGHT_TO = (0.355, 0.378)
+
+REWARD_SCROLL_MAX = 8                 # 单向最多滑几次
+# 滑动之后等画面停稳再 OCR + 点击（秒）。
+# ⚠️ 不能省：横向列表松手后还有惯性滚动，立刻 OCR 拿到的坐标在点下去时
+#    已经过期，会点错位置 —— 用户实测就是这个现象。
+REWARD_SCROLL_AFTER = 2.0
+REWARD_ENTRY_TIMEOUT = 5.0
+REWARD_OPEN_WAIT = 1.8
+REWARD_DAILY_TASK_ATTEMPTS = 3        # 点「每日任务」的重试次数
 
 
 class GuideNavTask(PageNavTask):
@@ -287,7 +385,7 @@ class GuideNavTask(PageNavTask):
                 self.log_warning(f"模板 {name} 不存在，指南列表的边界判断会失效，"
                                  f"滑动会一直做到次数上限")
 
-    def scroll_guide(self, to_bottom=True, slow=False):
+    def scroll_guide(self, to_bottom=True, slow=False, inner=False):
         """在指南列表上滑一次（手势起止点见模块开头的 GUIDE_SCROLL_* 常量）。
 
         ``to_bottom=True``  -> 想看列表**更下面**的内容：按住 0.777 滑到 0.325
@@ -296,16 +394,51 @@ class GuideNavTask(PageNavTask):
         手指方向和内容方向是反的，很容易搞混，所以参数按"想看哪边的内容"命名：
         手指往上拖时内容跟着往上走，看到的是更下面的条目。
 
-        ``slow=True`` 用更慢的拖动（纯 adb 路径滑不动时靠它补救）。
+        ``slow=True``   用更慢的拖动（纯 adb 路径滑不动时靠它补救）。
+        ``inner=True``  改用**内缩**的起止线（起点不在列表可触摸区时靠它补救，
+                        见 GUIDE_SCROLL_INNER_* 的说明）。
         """
         x = int(self.width * GUIDE_SCROLL_X)
-        if to_bottom:
+        if inner:
+            # 内缩后两个方向都用同一对内边界，起点稳稳在列表里
+            if to_bottom:
+                y_from = int(self.height * GUIDE_SCROLL_INNER_FROM_Y)
+                y_to = int(self.height * GUIDE_SCROLL_INNER_TO_Y)
+            else:
+                y_from = int(self.height * GUIDE_SCROLL_INNER_TO_Y)
+                y_to = int(self.height * GUIDE_SCROLL_INNER_FROM_Y)
+        elif to_bottom:
             y_from = int(self.height * GUIDE_SCROLL_DOWN_FROM_Y)
             y_to = int(self.height * GUIDE_SCROLL_DOWN_TO_Y)
         else:
             y_from = int(self.height * GUIDE_SCROLL_UP_FROM_Y)
             y_to = int(self.height * GUIDE_SCROLL_UP_TO_Y)
         self.gesture(x, y_from, x, y_to, duration=self.default_swipe_duration(slow=slow))
+
+    def screen_thumb(self):
+        """整屏小灰度缩略图，用来判断"画面有没有变化"。
+
+        和 list_thumb 的区别：那个只看指南左侧列表那一块，这个是整屏 ——
+        领奖时的确认框/物品展示界面会在屏幕中间，得看全屏。
+        """
+        try:
+            frame = self.frame
+        except Exception as e:
+            self.log_debug(f"取画面失败，跳过「有没有变化」判断: {e}")
+            return None
+        if frame is None:
+            return None
+        return cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (32, 32)).astype('int16')
+
+    def screen_changed(self, before, after, threshold=SCREEN_CHANGE_THRESHOLD):
+        """画面是否有明显变化；拿不到画面时保守地当成"有变化"。"""
+        if before is None or after is None:
+            return True
+        diff = float(np.abs(before - after).mean())
+        changed = diff > threshold
+        self.log_info(f"[画面] 变化差异 {diff:.2f}（阈值 {threshold}）-> "
+                      f"{'有变化' if changed else '没变化'}")
+        return changed
 
     def list_thumb(self):
         """给指南列表区域算一张小灰度缩略图，用来判断滑动前后画面有没有变。"""
@@ -324,12 +457,18 @@ class GuideNavTask(PageNavTask):
         return cv2.resize(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY), (32, 32)).astype('int16')
 
     def list_moved(self, before, after):
-        """滑动前后列表画面是否明显变化；拿不到画面时保守地当成"动了"。"""
+        """滑动前后列表画面是否明显变化；拿不到画面时保守地当成"动了"。
+
+        差异值用 **info** 级打印（不是 debug）：这是判断"手势有没有生效"的唯一依据，
+        用户日志里必须看得到，否则只能靠猜。
+        """
         if before is None or after is None:
             return True
         diff = float(np.abs(before - after).mean())
         moved = diff > GUIDE_LIST_MOVE_THRESHOLD
-        self.log_debug(f"[指南] 滑动前后画面差异 {diff:.2f} -> {'有变化' if moved else '没变化'}")
+        self.log_info(f"[指南] 滑动前后画面差异 {diff:.2f}"
+                      f"（阈值 {GUIDE_LIST_MOVE_THRESHOLD}）-> "
+                      f"{'有变化' if moved else '没变化'}")
         return moved
 
     def exit_guide(self):
@@ -341,6 +480,216 @@ class GuideNavTask(PageNavTask):
             self.log_warning(f"没找到 {GUIDE_CANCEL}，改用通用方式退回主页面")
         if not self.is_main_page():
             self.back_to_main(max_rounds=12, interval=0.8, log=False)
+
+    # ------------------------------------------------------------------
+    # 进入方式：忍界指引 / 奖励
+    # ------------------------------------------------------------------
+    def add_entry_mode_config(self, reward_item_text=None):
+        """登记「进入方式」选项。
+
+        :param reward_item_text: 走「奖励」（每日任务）时用来识别条目的文字。
+            传 None 表示这个任务在每日任务里**没有**，那就不提供「奖励」选项
+            （比如排行榜）—— 免得用户选了以后永远进不去。
+        """
+        # ⚠️ 「奖励」（每日任务）方式已按要求**停用** —— 实测有问题
+        # （左右滑不动、条目定位不稳）。这里仍然收下 reward_item_text 但不使用，
+        # 各任务的调用点不用改；以后要恢复只需把下面两行放回来。
+        options = [ENTRY_MODE_GUIDE]
+        # if reward_item_text:
+        #     options.append(ENTRY_MODE_REWARD)
+        self.default_config[ENTRY_MODE_KEY] = ENTRY_MODE_GUIDE
+        self.config_type[ENTRY_MODE_KEY] = {'type': 'drop_down', 'options': options}
+        self.config_description[ENTRY_MODE_KEY] = (
+            f'{ENTRY_MODE_GUIDE}：走游戏里的「指南」列表（条目多，要上下滑找）；'
+            f'{ENTRY_MODE_REWARD}：走「奖励 → 每日任务」（卡片少，找得快）'
+            if len(options) > 1 else
+            '这个任务在每日任务里没有，只能走「指南」')
+
+    def supports_entry_mode(self):
+        """这个任务是否**真的**登记了「进入方式」选项。
+
+        不能直接 return True —— 组织祈福也继承本类，但它走的是自己那套
+        main_reward 流程，并没有登记这个选项。按 config_type 里有没有来判断最准，
+        也免得一键日常往一个不认这个键的任务里塞配置。
+        """
+        return ENTRY_MODE_KEY in getattr(self, 'config_type', {})
+
+    def entry_mode(self):
+        return self.config.get(ENTRY_MODE_KEY, ENTRY_MODE_GUIDE)
+
+    def enter_by_mode(self, guide_text, guide_go, reward_item_text=None,
+                      item_feature=None):
+        """按「进入方式」选项决定走哪条路进入玩法。"""
+        mode = self.entry_mode()
+        # 「奖励」方式已停用：即使配置里还残留旧值也强制走指南
+        if mode == ENTRY_MODE_REWARD and reward_item_text and REWARD_MODE_ENABLED:
+            self.log_info(f"进入方式：{ENTRY_MODE_REWARD}（每日任务）")
+            return self.enter_reward(reward_item_text)
+        self.log_info(f"进入方式：{ENTRY_MODE_GUIDE}（指南列表）")
+        return self.enter_guide(guide_text, guide_go, item_feature=item_feature)
+
+    def enter_reward(self, item_text, max_swipes=REWARD_SCROLL_MAX):
+        """走「奖励 → 每日任务」进入玩法。
+
+        流程（和组织祈福一样）::
+
+            点 main_reward
+              -> OCR 点「每日任务」
+              -> 横向左右滑动找条目（OCR 认 item_text）
+              -> 点条目**正下方**的「立刻前往」
+
+        每日任务里的条目是横向排列的卡片，所以是左右滑而不是上下滑。
+        """
+        if not self.is_main_page():
+            self.log_info("当前不在主页面，先退回主页面")
+            self.back_to_main(max_rounds=12, interval=0.8, log=False)
+
+        if not self.click_feature(REWARD_ENTRY, time_out=REWARD_ENTRY_TIMEOUT):
+            self.log_error(f"未找到 {REWARD_ENTRY}，无法走「奖励」进入「{item_text}」")
+            return False
+        self.sleep(REWARD_OPEN_WAIT)
+
+        # 必须真正点进「每日任务」子页面才能左右滑 —— 用户反馈过"左右滑都没反应"，
+        # 原因多半就是这一步没成，滑在了奖励主页上。所以这里给几次重试。
+        entered = False
+        for attempt in range(1, REWARD_DAILY_TASK_ATTEMPTS + 1):
+            if self.click_text(DAILY_TASK_PATTERN, time_out=REWARD_ENTRY_TIMEOUT):
+                entered = True
+                break
+            self.log_warning(f"第 {attempt}/{REWARD_DAILY_TASK_ATTEMPTS} 次没找到"
+                             f"「每日任务」，重试")
+            self.sleep(1.0)
+        if not entered:
+            self.log_error(f"点了 {REWARD_DAILY_TASK_ATTEMPTS} 次都没找到「每日任务」，"
+                           f"无法走「奖励」进入（左右滑动必须在每日任务页面里做）")
+            return False
+        self.sleep(REWARD_OPEN_WAIT)
+
+        box = self.find_reward_item(item_text, max_swipes)
+        if box is None:
+            self.log_warning(f"每日任务里左右滑遍都没找到「{item_text}」")
+            self.exit_reward()
+            return False
+
+        # 再确认一次画面稳定：box 是刚 OCR 出来的，但列表可能还在微动，
+        # 而「立刻前往」是按 anchor 的位置关系找的，anchor 一动就可能点偏
+        self.sleep(REWARD_SCROLL_AFTER)
+        if not self.click_below(box, GO_TEXT_PATTERN, time_out=REWARD_ENTRY_TIMEOUT):
+            self.log_warning(f"没找到「{item_text}」正下方的「{GO_TEXT}」")
+            self.exit_reward()
+            return False
+        self.sleep(REWARD_OPEN_WAIT)
+        self.log_info(f"已通过「奖励」进入「{item_text}」")
+        return True
+
+    def find_reward_item(self, item_text, max_swipes=REWARD_SCROLL_MAX):
+        """在每日任务列表里左右滑动找条目，返回 Box 或 None。
+
+        先往左拖（看右边的内容），再往右拖（看回左边）。
+        """
+        pattern = re.compile(re.escape(item_text))
+        box = self.find_reward_item_on_screen(pattern)
+        if box is not None:
+            self.log_info(f"[每日任务] 当前画面已看到「{item_text}」")
+            return box
+
+        # 先往右找（列表一般从左端开始，目标多半在右边），再折返往左找
+        for i in range(1, max_swipes + 1):
+            if self.should_stop('每日任务滑动'):
+                return None
+            self.log_info(f"[每日任务] 往右找 {i}/{max_swipes}：「{item_text}」")
+            self.scroll_reward(to_left=False)
+            self.sleep(REWARD_SCROLL_AFTER)      # 等画面停稳，否则会点错位置
+            box = self.find_reward_item_on_screen(pattern)
+            if box is not None:
+                self.log_info(f"[每日任务] 往右找 {i} 次后找到「{item_text}」")
+                return box
+
+        for i in range(1, max_swipes * 2 + 1):
+            if self.should_stop('每日任务滑动'):
+                return None
+            self.log_info(f"[每日任务] 往左找 {i}/{max_swipes * 2}：「{item_text}」")
+            self.scroll_reward(to_left=True)
+            self.sleep(REWARD_SCROLL_AFTER)      # 同上
+            box = self.find_reward_item_on_screen(pattern)
+            if box is not None:
+                self.log_info(f"[每日任务] 往左找 {i} 次后找到「{item_text}」")
+                return box
+        return None
+
+    def find_reward_item_on_screen(self, pattern):
+        """当前画面 OCR 找每日任务条目。"""
+        try:
+            boxes = self.ocr(match=[pattern])
+        except Exception as e:
+            self.log_debug(f"OCR 找「{pattern.pattern}」出错: {e}")
+            boxes = None
+        if boxes:
+            if not isinstance(boxes, list):
+                boxes = [boxes]
+            for box in boxes:
+                if all(hasattr(box, a) for a in ('x', 'y', 'width', 'height')):
+                    self.log_info(f"[每日任务] OCR 认到「{pattern.pattern}」"
+                                  f"({box.x}, {box.y})")
+                    return box
+        return None
+
+    def scroll_reward(self, to_left=True):
+        """在「奖励 → 每日任务」页面上左右滑一次（固定起止线）。
+
+        ``to_left=True``  想看**更左边**的内容：按住 (0.355,0.378) 滑到 (0.808,0.368)
+        ``to_left=False`` 想看**更右边**的内容：按住 (0.808,0.368) 滑到 (0.355,0.378)
+
+        手指方向和内容方向是反的，所以参数按"想看哪边的内容"命名 ——
+        和指南那边（to_bottom）保持同一套习惯，免得又搞反。
+        """
+        if to_left:
+            (fx, fy), (tx, ty) = REWARD_SCROLL_LEFT_FROM, REWARD_SCROLL_LEFT_TO
+        else:
+            (fx, fy), (tx, ty) = REWARD_SCROLL_RIGHT_FROM, REWARD_SCROLL_RIGHT_TO
+        self.gesture(int(self.width * fx), int(self.height * fy),
+                     int(self.width * tx), int(self.height * ty),
+                     duration=self.default_swipe_duration())
+
+    def exit_reward(self):
+        """点 reward_cancel / popu_cancel 退出每日任务界面。"""
+        for name in ('reward_cancel', 'popu_cancel'):
+            if self.click_feature(name, time_out=2.0):
+                self.log_info(f"已点击 {name} 退出每日任务")
+                self.sleep(1.0)
+                return
+        if not self.is_main_page():
+            self.back_to_main(max_rounds=12, interval=0.8, log=False)
+
+    def open_guide(self, attempts=GUIDE_ENTRY_ATTEMPTS):
+        """点开「指南」，并**确认真的进入了指南界面**。
+
+        为什么要确认：实测出现过"报已点击，但界面根本没换"的情况 ——
+        那时后面所有滑动都在**主页面左侧那一列图标**上做，永远找不到条目，
+        而且日志看起来一切正常（手势、画面差异都有），极难排查。
+
+        判据（用户提出）：点完等 GUIDE_ENTRY_VERIFY_WAIT，如果**还能看到
+        main_guide**（它是主页面上的指南入口图标，进了指南界面就看不到它了），
+        说明还停在主页面 -> 这次没点开 -> 重试。
+
+        这样"进入失败"会在**最外层就被发现**，不会再让后续步骤白跑。
+        """
+        for i in range(1, attempts + 1):
+            if self.should_stop('打开指南'):
+                return False
+            if not self.click_feature(GUIDE_ENTRY, time_out=GUIDE_ENTRY_TIMEOUT):
+                self.log_error(f"未找到 {GUIDE_ENTRY}")
+                return False
+            self.sleep(GUIDE_ENTRY_VERIFY_WAIT)
+            if self._safe_find_one(GUIDE_ENTRY) is None:
+                self.log_info(f"已进入指南界面（第 {i} 次尝试）")
+                self.sleep(GUIDE_OPEN_WAIT)
+                return True
+            self.log_warning(f"第 {i}/{attempts} 次点了 {GUIDE_ENTRY} 但还是停在主页面"
+                             f"（还能看到 {GUIDE_ENTRY}），进入指南失败，重试")
+            self.sleep(0.5)
+        self.log_error(f"连续 {attempts} 次都没能进入指南界面")
+        return False
 
     def enter_guide(self, item_text, go_feature, item_feature=None,
                     max_swipes=GUIDE_SCROLL_MAX):
@@ -367,11 +716,10 @@ class GuideNavTask(PageNavTask):
             self.log_info("当前不在主页面，先退回主页面")
             self.back_to_main(max_rounds=12, interval=0.8, log=False)
 
-        # 2. 点开指南
-        if not self.click_feature(GUIDE_ENTRY, time_out=GUIDE_ENTRY_TIMEOUT):
-            self.log_error(f"未找到 {GUIDE_ENTRY}，无法通过指南进入「{item_text}」")
+        # 2. 点开指南（**必须确认真的进去了**）
+        if not self.open_guide():
+            self.log_error(f"没能进入指南界面，无法通过指南进入「{item_text}」")
             return False
-        self.sleep(GUIDE_OPEN_WAIT)
 
         # 3. 滑动 + OCR 找条目
         box = self.find_entry_in_guide(item_text, item_feature, max_swipes)
@@ -420,18 +768,65 @@ class GuideNavTask(PageNavTask):
         # 再折返朝顶部方向找
         return self._sweep_entry(item_pattern, templates, to_bottom=False, max_swipes=max_swipes)
 
-    def find_entry_on_screen(self, item_pattern, templates):
-        """在当前画面里找条目：先 OCR 文字，再退回模板。"""
+    def _entry_patterns(self, item_pattern):
+        """返回要尝试的匹配模式：先精确，再前缀容错。
+
+        前缀容错是为了对付 OCR 把形近字认错（小队突袭 -> 小队突装）
+        和把长名字截断（任务集会所 -> 任务集）。见 GUIDE_ENTRY_PREFIX_LEN。
+        """
+        patterns = [item_pattern]
+        plain = re.sub(r'[^\w\u4e00-\u9fff]', '', item_pattern.pattern)
+        if len(plain) >= GUIDE_ENTRY_PREFIX_LEN:
+            prefix = plain[:GUIDE_ENTRY_PREFIX_LEN]
+            if prefix != item_pattern.pattern:
+                patterns.append(re.compile(re.escape(prefix)))
+        return patterns
+
+    def _find_entry_by_ocr(self, pattern):
+        """按一个模式在左侧列表区域里找条目，返回 Box 或 None。"""
         try:
-            boxes = self.ocr(match=[item_pattern])
+            boxes = self.ocr(match=[pattern])
         except Exception as e:
             self.log_debug(f"OCR 找条目出错: {e}")
-            boxes = None
-        if boxes:
-            box = boxes[0] if isinstance(boxes, list) else boxes
-            if all(hasattr(box, a) for a in ('x', 'y')):
-                self.log_info(f"[指南] OCR 认到「{item_pattern.pattern}」"
-                              f"({box.x}, {box.y})")
+            return None
+        if not boxes:
+            return None
+        if not isinstance(boxes, list):
+            boxes = [boxes]
+        width = getattr(self, 'width', 0) or 1
+        height = getattr(self, 'height', 0) or 1
+        rejected = []
+        for box in boxes:
+            if not all(hasattr(box, a) for a in ('x', 'y', 'width', 'height')):
+                continue
+            cx = (box.x + box.width / 2) / width
+            cy = (box.y + box.height / 2) / height
+            if (cx <= GUIDE_LIST_HIT_X_MAX
+                    and GUIDE_LIST_HIT_Y_MIN <= cy <= GUIDE_LIST_HIT_Y_MAX):
+                return box
+            rejected.append((box.x, box.y, round(cx, 3)))
+        if rejected:
+            self.log_warning(f"[指南] OCR 认到「{pattern.pattern}」但都不在"
+                             f"左侧列表区域内（x 上限 {GUIDE_LIST_HIT_X_MAX}）："
+                             f"{rejected}，忽略")
+        return None
+
+    def find_entry_on_screen(self, item_pattern, templates):
+        """在当前画面里找条目：先 OCR 文字（含前缀容错），再退回模板。
+
+        OCR 是全屏的，所以只在左侧列表区域里认（见 GUIDE_LIST_HIT_*）；
+        精确匹配失败时用前缀再试一次（对付形近字认错和名字截断）。
+        """
+        patterns = self._entry_patterns(item_pattern)
+        for i, pattern in enumerate(patterns):
+            box = self._find_entry_by_ocr(pattern)
+            if box is not None:
+                if i > 0:
+                    self.log_warning(f"[指南] 精确匹配没找到「{item_pattern.pattern}」，"
+                                     f"用前缀「{pattern.pattern}」容错匹配到了"
+                                     f"（多半是 OCR 认错字或截断了）")
+                self.log_info(f"[指南] OCR 认到「{pattern.pattern}」"
+                              f"({box.x}, {box.y}) 在列表区域内")
                 return box
         for name in templates:
             box = self._safe_find_one(name)
@@ -456,7 +851,9 @@ class GuideNavTask(PageNavTask):
         direction = '下' if to_bottom else '上'
         boundary = GUIDE_LISTBOTTOM if to_bottom else GUIDE_LISTTOP
         stuck_streak = 0
-        slow_retry_used = False      # 每个方向只做一次"慢速补救"，避免反复拖延
+        slow_retry_used = False      # 每个方向只做一次"慢速拖动"补救
+        inner_retry_used = False     # 每个方向只做一次"内缩起止线"补救
+        inner_mode = False           # 内缩线一旦证明有效，后面就一直用它
 
         for i in range(1, max_swipes + 1):
             if self.should_stop('指南滑动'):
@@ -472,7 +869,7 @@ class GuideNavTask(PageNavTask):
 
             self.log_info(f"[指南] 往{direction}找 {i}/{max_swipes}：「{item_pattern.pattern}」")
             before = self.list_thumb()
-            self.scroll_guide(to_bottom=to_bottom)
+            self.scroll_guide(to_bottom=to_bottom, inner=inner_mode)
 
             box = self.find_entry_on_screen(item_pattern, templates)
             if box is not None:
@@ -491,9 +888,13 @@ class GuideNavTask(PageNavTask):
                 self.log_info(f"[指南] 已经到顶（看到 {GUIDE_LISTTOP}），停止往{direction}找")
                 return None
 
-            # ---- 不是边界：先用更慢的拖动补救一次 ----
-            # 纯 adb 路径（input swipe）会把 settle_time 丢掉，"拖太快"会让游戏
-            # 当成一次甩动而不是拖拽，列表于是纹丝不动 —— 拉长 duration 通常能救。
+            # ---- 不是边界：两级补救，都失败才计入 stuck ----
+            #
+            # 补救阶梯（每级只做一次）：
+            #   ① 更慢的拖动 —— 纯 adb 的 input swipe 会丢掉 settle_time，
+            #      "拖太快被当成甩动"是最常见的失效原因
+            #   ② 内缩的起止线 —— 起点可能没落在列表的可触摸区里
+            #      （往下找的起点 0.777 尤其可疑，见 GUIDE_SCROLL_INNER_*）
             if not slow_retry_used and not self.uses_settle_time():
                 slow_retry_used = True
                 self.log_warning(
@@ -512,13 +913,39 @@ class GuideNavTask(PageNavTask):
                     continue
                 self.log_warning("[指南] 慢速拖动也没能让画面变化")
 
+            if not inner_retry_used:
+                inner_retry_used = True
+                self.log_warning(
+                    f"[指南] 往{direction}还是不动，改用**内缩**的起止线再试一次"
+                    f"（{GUIDE_SCROLL_INNER_FROM_Y} -> {GUIDE_SCROLL_INNER_TO_Y}）"
+                    f"—— 怀疑起点 {GUIDE_SCROLL_DOWN_FROM_Y if to_bottom else GUIDE_SCROLL_UP_FROM_Y}"
+                    f" 没落在列表的可触摸区域里")
+                before = self.list_thumb()
+                self.scroll_guide(to_bottom=to_bottom, inner=True)
+                box = self.find_entry_on_screen(item_pattern, templates)
+                if box is not None:
+                    self.log_info(f"[指南] 内缩起止线后找到「{item_pattern.pattern}」")
+                    return box
+                if self.list_moved(before, self.list_thumb()):
+                    self.log_info("[指南] 内缩起止线生效了，后面一直用内缩的线滑动")
+                    inner_mode = True      # 之后都用内缩线，不再重复补救
+                    stuck_streak = 0
+                    continue
+                self.log_warning("[指南] 内缩起止线也没能让画面变化")
+
             stuck_streak += 1
-            self.log_error(
-                f"[指南] 往{direction}滑之后画面没有变化，"
-                f"但也没看到 {boundary} —— 判定为滑动出问题（手势没生效），"
-                f"第 {stuck_streak}/{GUIDE_STUCK_TOLERANCE} 次")
+            # 仍然按用户当初的要求"判定为滑动出问题"（不能悄悄当成到头了），
+            # 但级别用 warning —— 实测更常见的原因是"这个方向本来就已经到头"：
+            # 指南列表**不保证一打开就停在顶部**，初始位置跟账号状态有关。
+            # 用户日志里就能看到同一个人两次运行，一次一打开就认出「忍具锻造」
+            # （=已经在底部），另一次没有。所以报 ERROR 会把人吓到以为坏了。
+            self.log_warning(
+                f"[指南] 往{direction}滑之后画面没有变化，也没看到 {boundary} —— "
+                f"判定为滑动出问题（手势没生效），第 {stuck_streak}/{GUIDE_STUCK_TOLERANCE} 次；"
+                f"也可能是这个方向本来就已经到头")
             if stuck_streak >= GUIDE_STUCK_TOLERANCE:
-                self.log_error(f"[指南] 连续 {stuck_streak} 次滑不动，放弃往{direction}找")
+                self.log_warning(f"[指南] 放弃往{direction}找（换另一个方向继续找，"
+                                 f"两边都扫过才算找遍整个列表）")
                 return None
             self.sleep(0.5)
 
