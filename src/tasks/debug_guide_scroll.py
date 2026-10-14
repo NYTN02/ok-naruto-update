@@ -44,6 +44,10 @@ from src.tasks.guide_nav import (
 DIRECTION_DOWN = '往下找'
 DIRECTION_UP = '往上找'
 DIRECTION_BOTH = '两个都测'
+
+# 滑不动时"退出指南再重进"最多试几次（用户指定 2 次）
+REENTRY_MAX = 2
+REENTRY_WAIT = 1.2
 DIRECTIONS = [DIRECTION_BOTH, DIRECTION_DOWN, DIRECTION_UP]
 
 LINE_USER = '用户线'
@@ -121,6 +125,39 @@ class DebugGuideScrollTask(GuideNavTask):
             return [False]
         return [True, False]
 
+    def thumb_sig(self, thumb):
+        """缩略图的"指纹"：像素和。用来判断画面到底有没有换过。
+
+        差异恰好 0.000 时分不清"手势没生效"和"截图没刷新"，
+        指纹能帮上忙 —— 换手势后指纹还是同一个值，就更像截图没刷新。
+        """
+        if thumb is None:
+            return -1
+        try:
+            return int(thumb.sum())
+        except Exception:
+            return -1
+
+    def reenter_guide(self):
+        """退出指南 -> 回主页面 -> 重新点开指南。
+
+        用户实测：用鼠标手动操作也能复现"滑不动"，说明那一刻**界面本身**
+        不接受滑动（不是注入的问题）。所以用"退出再重进"把界面状态重置掉，
+        比继续折腾注入方式更靠谱。
+        """
+        self.log_info("[重进] 点 guide_cancel 退出指南")
+        if not self.click_feature(GUIDE_CANCEL, time_out=3.0):
+            self.log_warning(f"[重进] 没找到 {GUIDE_CANCEL}")
+        self.sleep(REENTRY_WAIT)
+
+        if not self.is_main_page():
+            self.log_info("[重进] 当前不在主页面，先退回去")
+            self.back_to_main(max_rounds=12, interval=0.8, log=False)
+
+        ok = self.open_guide()          # 会确认"真的进去了"
+        self.log_info(f"[重进] 重新打开指南: {'成功' if ok else '失败'}")
+        return ok
+
     def _test_one_direction(self, to_bottom):
         """测一个方向，返回 (方向名, 平均差异, 最大差异, 次数)。"""
         direction = '往下找' if to_bottom else '往上找'
@@ -158,14 +195,44 @@ class DebugGuideScrollTask(GuideNavTask):
                 break
 
             before = self.list_thumb()
+            sig_before = self.thumb_sig(before)
             # 直接用底层手势，不走 _sweep_entry 的补救逻辑 ——
             # 这里要测的是"这一种手势本身行不行"，加了补救就看不清了
             self.scroll_guide(to_bottom=to_bottom, inner=inner)
             after = self.list_thumb()
+            sig_after = self.thumb_sig(after)
             diff = self.diff_value(before, after)
             diffs.append(diff)
-            self.log_info(f"[{direction}] 第 {i}/{times} 次：画面差异 {diff:.3f}")
-            self.sleep(interval)
+            at_top = self.at_guide_top()
+            at_bottom = self.at_guide_bottom()
+            self.log_info(f"[{direction}] 第 {i}/{times} 次：画面差异 {diff:.3f}"
+                          f"  指纹 {sig_before} -> {sig_after}"
+                          f"  到顶={at_top} 到底={at_bottom}")
+            if diff == 0 and sig_before == sig_after:
+                self.log_warning(f"[{direction}] 差异恰好 0 且指纹完全相同 —— "
+                                 f"这个手势此刻无效（用户实测手动也复现）")
+                # ★ 换另一条起止线再滑一次（用户提出要测的方法）
+                #   依据: 不同机器"能用的线"不一样 —— 换一条往往就能滑。
+                #   推测机制: 列表滚动后同一个 y 会落在不同元素上，
+                #   有时落在不接受拖拽的地方 -> 拖动被吞；换条线就落在能拖的地方。
+                other_inner = not inner
+                other_name = LINE_INNER if other_inner else LINE_USER
+                self.log_warning(f"[{direction}] 换成另一条起止线「{other_name}」再滑一次")
+                before2 = self.list_thumb()
+                sig_b2 = self.thumb_sig(before2)
+                self.scroll_guide(to_bottom=to_bottom, inner=other_inner)
+                after2 = self.list_thumb()
+                sig_a2 = self.thumb_sig(after2)
+                diff2 = self.diff_value(before2, after2)
+                if diff2 > 0:
+                    self.log_info(f"[{direction}] ✓ 换线之后恢复了！"
+                                  f"差异 {diff2:.3f}（{line_name} -> {other_name}），"
+                                  f"指纹 {sig_b2} -> {sig_a2}")
+                    diffs.append(diff2)
+                else:
+                    self.log_warning(f"[{direction}] ✗ 换线（{other_name}）也滑不动，"
+                                     f"指纹 {sig_b2} -> {sig_a2} —— "
+                                     f"两条线都失效，这次是真的卡住了")
 
         if not diffs:
             self.log_warning(f"[{direction}] 一次都没滑成（可能已在列表端点）")

@@ -194,6 +194,18 @@ GUIDE_STUCK_TOLERANCE = 2         # 连续几次滑不动就放弃这个方向
 GUIDE_ENTRY_TIMEOUT = 5.0       # 等 main_guide 出现
 # 点完 main_guide 之后等多久，再确认"是不是真的进指南了"
 GUIDE_ENTRY_VERIFY_WAIT = 1.0
+# 「滑不动」时用来冲掉卡住触摸状态的小拖动（见 cleanup_stuck_touch）
+GUIDE_CLEANUP_REL = (0.5, 0.45)
+
+# 滑不动时先"点一下列表"再滑（用户建议的做法）。
+# 坐标落在指南左侧列表区域内（x=0.106 在 0.05~0.30 之间，y=0.458 在中部），
+# 所以这一下点的是列表本身 —— 相当于给列表一次完整的 down+up。
+GUIDE_PRESS_REL = (0.106, 0.458)
+GUIDE_PRESS_WAIT = 0.3     # 中性位置：不在左侧列表里，避免误点条目
+GUIDE_CLEANUP_PX = 30               # 超过触摸阈值，不会被当成点击
+GUIDE_CLEANUP_WAIT = 0.4
+# ADB 通道清状态时那条 drag 的时长（毫秒）
+GUIDE_CLEANUP_ADB_MS = 200
 # 点不开就重试几次（见 open_guide 的说明）
 GUIDE_ENTRY_ATTEMPTS = 3
 GUIDE_OPEN_WAIT = 1.8           # 点开指南后等列表加载
@@ -661,6 +673,68 @@ class GuideNavTask(PageNavTask):
         if not self.is_main_page():
             self.back_to_main(max_rounds=12, interval=0.8, log=False)
 
+    def cleanup_stuck_touch(self):
+        """滑不动时的补救：**先在列表上点一下**（用户建议），再走兜底拖动。
+
+        当前顺序：
+          ① 点一下 rel(0.106, 0.458)（落在指南左侧列表内）—— 用户建议
+          ② 兜底：ADB 通道 `input swipe` 小拖动
+          ③ 再兜底：IPC 通道小拖动
+
+        历史（为什么变成现在这样）：
+
+        为什么换通道（测试版本日志2.txt 实测）::
+
+            [往下找] 第 1/5 次：画面差异 0.000  指纹 118974 -> 118974
+            [指南] 补一次小拖动…（IPC 注入）
+            [往下找] ✗ 清理手势没用，指纹 118974 -> 118974
+
+        IPC 版本的小拖动**同样被吞掉** —— 说明那一刻 MuMu 的原生注入通道整体失效，
+        而用户手动滑一下能恢复。所以这里改用 `adb shell input swipe`：
+        它走 adbd / Android 输入系统，和原生 IPC 注入是两条独立的路。
+
+        * 仍然用**小拖动**而不是点击 —— 位移超过触摸阈值，不会被当成点击
+        * 起点在中性位置（不在左侧列表里），避免误触条目
+        * 拿不到 device_manager.shell 时退回 IPC 版本（聊胜于无）
+        """
+        # ★ 第一步（用户建议）：先在列表上**点一下**，再靠调用方去滑。
+        # 点击 = 一次完整的 down + up，比拖动更"干净"；
+        # 而实测拖动（含 ADB 通道）都无效，所以换成点击试试。
+        px = int(self.width * GUIDE_PRESS_REL[0])
+        py = int(self.height * GUIDE_PRESS_REL[1])
+        try:
+            self.log_info(f"[指南] 先在列表上点一下 rel{GUIDE_PRESS_REL}"
+                          f"（{px},{py}）再滑 —— 试试能不能解开卡住的触摸状态")
+            self.click(px, py)
+            self.sleep(GUIDE_PRESS_WAIT)
+            self.reset_scene()      # 让下一步取到新画面，别用点击前的旧帧
+        except Exception as e:
+            self.log_debug(f"点列表失败（继续后面的兜底）: {e}")
+
+        x = int(self.width * GUIDE_CLEANUP_REL[0])
+        y = int(self.height * GUIDE_CLEANUP_REL[1])
+        y2 = y - GUIDE_CLEANUP_PX
+
+        sent = False
+        try:
+            # ⚠️ 必须把整条命令当**一个字符串**传：BaseDevice.shell() 只收
+            # 2~6 个位置参数，拆成 7 个会 TypeError（上次就是这么静默退回 IPC 的）。
+            cmd = f'input swipe {x} {y} {x} {y2} {GUIDE_CLEANUP_ADB_MS}'
+            self.executor.device_manager.shell(cmd)
+            sent = True
+            self.log_info(f"[指南] 已用 **ADB 通道**发一次小拖动清状态: {cmd}")
+        except Exception as e:
+            self.log_warning(f"[指南] ADB 通道清状态失败（{e}），退回 IPC 版本")
+
+        if not sent:
+            try:
+                self.gesture(x, y, x, y2, duration=0.2)
+                self.log_info("[指南] 已用 IPC 通道发一次小拖动清状态")
+            except Exception as e:
+                self.log_debug(f"清状态手势也失败（不影响后续）: {e}")
+
+        self.sleep(GUIDE_CLEANUP_WAIT)
+
     def open_guide(self, attempts=GUIDE_ENTRY_ATTEMPTS):
         """点开「指南」，并**确认真的进入了指南界面**。
 
@@ -852,8 +926,8 @@ class GuideNavTask(PageNavTask):
         boundary = GUIDE_LISTBOTTOM if to_bottom else GUIDE_LISTTOP
         stuck_streak = 0
         slow_retry_used = False      # 每个方向只做一次"慢速拖动"补救
-        inner_retry_used = False     # 每个方向只做一次"内缩起止线"补救
-        inner_mode = False           # 内缩线一旦证明有效，后面就一直用它
+        inner_retry_used = False     # 每个方向只做一次"换另一条起止线"补救
+        inner_mode = False           # 当前用哪条线（换线生效后一直用它）
 
         for i in range(1, max_swipes + 1):
             if self.should_stop('指南滑动'):
@@ -915,23 +989,25 @@ class GuideNavTask(PageNavTask):
 
             if not inner_retry_used:
                 inner_retry_used = True
+                # ★ 换成**另一条**起止线再试（用户实测：换线能立刻恢复）
+                new_inner = not inner_mode
+                new_name = '内缩线' if new_inner else '用户线'
                 self.log_warning(
-                    f"[指南] 往{direction}还是不动，改用**内缩**的起止线再试一次"
-                    f"（{GUIDE_SCROLL_INNER_FROM_Y} -> {GUIDE_SCROLL_INNER_TO_Y}）"
-                    f"—— 怀疑起点 {GUIDE_SCROLL_DOWN_FROM_Y if to_bottom else GUIDE_SCROLL_UP_FROM_Y}"
-                    f" 没落在列表的可触摸区域里")
+                    f"[指南] 往{direction}滑不动 —— 换成另一条起止线「{new_name}」再试"
+                    f"（用户实测：换线往往就能滑）")
                 before = self.list_thumb()
-                self.scroll_guide(to_bottom=to_bottom, inner=True)
+                self.scroll_guide(to_bottom=to_bottom, inner=new_inner)
                 box = self.find_entry_on_screen(item_pattern, templates)
                 if box is not None:
-                    self.log_info(f"[指南] 内缩起止线后找到「{item_pattern.pattern}」")
+                    self.log_info(f"[指南] 换线后找到「{item_pattern.pattern}」")
                     return box
                 if self.list_moved(before, self.list_thumb()):
-                    self.log_info("[指南] 内缩起止线生效了，后面一直用内缩的线滑动")
-                    inner_mode = True      # 之后都用内缩线，不再重复补救
+                    self.log_info(f"[指南] 换成「{new_name}」生效了，"
+                                  f"后面一直用这条线滑动")
+                    inner_mode = new_inner     # 之后都用这条线，不再换回去
                     stuck_streak = 0
                     continue
-                self.log_warning("[指南] 内缩起止线也没能让画面变化")
+                self.log_warning(f"[指南] 换成「{new_name}」也没能让画面变化")
 
             stuck_streak += 1
             # 仍然按用户当初的要求"判定为滑动出问题"（不能悄悄当成到头了），
